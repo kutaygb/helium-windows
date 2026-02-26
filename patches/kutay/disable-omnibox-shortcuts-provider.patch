@@ -1,0 +1,13 @@
+--- a/components/omnibox/browser/autocomplete_controller.cc
++++ b/components/omnibox/browser/autocomplete_controller.cc
+@@ -1331,10 +1331,6 @@ void AutocompleteController::InitializeSyncProviders(int provider_types) {
+     keyword_provider_ = keyword_provider.get();
+     providers_.push_back(std::move(keyword_provider));
+   }
+-  if (provider_types & AutocompleteProvider::TYPE_SHORTCUTS) {
+-    providers_.push_back(
+-        base::MakeRefCounted<ShortcutsProvider>(provider_client_.get()));
+-  }
+   if (provider_types & AutocompleteProvider::TYPE_ZERO_SUGGEST) {
+     zero_suggest_provider_ =
+         ZeroSuggestProvider::Create(provider_client_.get(), this);
