@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import ctypes
 from pathlib import Path
+from contextlib import chdir
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'helium-chromium' / 'utils'))
 import downloads
@@ -142,7 +143,6 @@ def main():
         type=int,
     )
     parser.add_argument('--build-installer', action='store_true')
-    parser.add_argument('--do-package', action='store_true')
     parser.add_argument(
         '--arm',
         action='store_true'
@@ -237,6 +237,11 @@ def main():
         get_logger().info('Unpacking downloads...')
         downloads.unpack_downloads(download_info_win, downloads_cache, None, source_tree, extractors)
 
+        # Download rust & llvm toolchains
+        with chdir('build\\src'):
+            _run_build_process(sys.executable, 'tools\\rust\\update_rust.py')
+            _run_build_process(sys.executable, 'tools\\clang\\scripts\\update.py')
+
         if not args.dev:
             # Apply patches
             # First, ungoogled-chromium-patches
@@ -265,7 +270,8 @@ def main():
             name_substitution.do_substitution(
                 source_tree,
                 tarpath=None,
-                workers=min(32, os.cpu_count())
+                workers=min(32, os.cpu_count()),
+                dry_run=False
             )
         else:
             print("Apply patches using quilt, then press Enter")
@@ -304,41 +310,6 @@ def main():
             source_tree
         )
 
-    # Check if rust-toolchain folder has been populated
-    HOST_CPU_IS_64BIT = sys.maxsize > 2**32
-    RUST_DIR_DST = source_tree / 'third_party' / 'rust-toolchain'
-    RUST_DIR_SRC64 = source_tree / 'third_party' / 'rust-toolchain-x64'
-    RUST_DIR_SRCARM = source_tree / 'third_party' / 'rust-toolchain-arm'
-    RUST_FLAG_FILE = RUST_DIR_DST / 'INSTALLED_VERSION'
-    if not args.ci or not RUST_FLAG_FILE.exists():
-        # Directories to copy from source to target folder
-        DIRS_TO_COPY = ['bin', 'lib']
-
-        # Loop over all source folders
-        for rust_dir_src in [RUST_DIR_SRC64, RUST_DIR_SRCARM]:
-            # Loop over all dirs to copy
-            for dir_to_copy in DIRS_TO_COPY:
-                # Copy bin folder for host architecture
-                if (dir_to_copy == 'bin') and (HOST_CPU_IS_64BIT != (rust_dir_src == RUST_DIR_SRC64)):
-                    continue
-
-                # Create target dir
-                target_dir = RUST_DIR_DST / dir_to_copy
-                if not os.path.isdir(target_dir):
-                    os.makedirs(target_dir)
-
-                # Loop over all subfolders of the rust source dir
-                for cp_src in rust_dir_src.glob(f'*/{dir_to_copy}/*'):
-                    cp_dst = target_dir / cp_src.name
-                    if cp_src.is_dir():
-                        shutil.copytree(cp_src, cp_dst, dirs_exist_ok=True)
-                    else:
-                        shutil.copy2(cp_src, cp_dst)
-
-        # Generate version file
-        with open(RUST_FLAG_FILE, 'w') as f:
-            subprocess.run([source_tree / 'third_party' / 'rust-toolchain-x64' / 'rustc' / 'bin' / 'rustc.exe', '--version'], stdout=f)
-
     if not args.ci or not (source_tree / 'out/Default').exists():
         # Output args.gn
         (source_tree / 'out/Default').mkdir(parents=True)
@@ -373,12 +344,6 @@ def main():
         # Run gn gen
         _run_build_process('out\\Default\\gn.exe', 'gen', 'out\\Default', '--fail-on-unused-args')
 
-    if not args.ci or not os.path.exists('third_party\\rust-toolchain\\bin\\bindgen.exe'):
-        # Build bindgen
-        _run_build_process(
-            sys.executable,
-            'tools\\rust\\build_bindgen.py', '--skip-test')
-
     # Ninja commandline
     ninja_commandline = ['third_party\\ninja\\ninja.exe']
     if args.thread_count is not None:
@@ -393,7 +358,7 @@ def main():
         ninja_commandline.append('setup')
 
     if not args.ci or args.build_installer:
-        ninja_commandline.append('mini_installer')
+        ninja_commandline.append('mini_installer_archive')
 
     # Run ninja
     if args.ci:
@@ -402,11 +367,10 @@ def main():
         timeout = int(max_time - secs_spent)
         print(f"{timeout} seconds left for build")
 
-        if args.do_package:
+        _run_build_process_timeout(*ninja_commandline, timeout=timeout)
+        if args.build_installer:
             os.chdir(_ROOT_DIR)
-            subprocess.run([sys.executable, 'package.py'])
-        else:
-            _run_build_process_timeout(*ninja_commandline, timeout=timeout)
+            subprocess.run([sys.executable, 'package.py'], check=True)
     else:
         _run_build_process(*ninja_commandline)
 
